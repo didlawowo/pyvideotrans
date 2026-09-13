@@ -2,15 +2,36 @@
 
 import hashlib
 import hmac
+import secrets
+from urllib.parse import urlsplit
 
 from starlette.responses import JSONResponse, RedirectResponse
 from starlette.requests import Request
 
+# Secret de session tiré au démarrage, jamais dérivé de MCP_AUTH_TOKEN : un
+# cookie volé ne révèle rien du Bearer, et un redémarrage du processus invalide
+# toutes les sessions navigateur (seule forme de révocation disponible ici,
+# cohérente avec l'état des tâches qui est lui aussi en mémoire).
+_SESSION_SECRET = secrets.token_bytes(32)
+
 
 def browser_cookie(token: str) -> str:
-    return hmac.new(
-        token.encode(), b"pyvideotrans-browser-v1", hashlib.sha256
-    ).hexdigest()
+    return hmac.new(_SESSION_SECRET, token.encode(), hashlib.sha256).hexdigest()
+
+
+def _same_origin(origin: str, request: Request) -> bool:
+    """Compare l'hôte, pas l'URL complète.
+
+    Derrière Traefik, uvicorn ne fait confiance aux en-têtes X-Forwarded-* que
+    si `forwarded_allow_ips` couvre l'IP du proxy ; sinon `request.base_url`
+    reste en `http://` alors que le navigateur annonce `Origin: https://...`,
+    et toute mutation navigateur serait rejetée. L'hôte, lui, vient du Host et
+    reste juste dans les deux cas. Une origine d'un autre hôte reste refusée.
+    """
+    if not origin:
+        return True
+    parts = urlsplit(origin)
+    return bool(parts.netloc) and parts.netloc == request.url.netloc
 
 
 class AuthMiddleware:
@@ -38,8 +59,7 @@ class AuthMiddleware:
         # MCP always requires Bearer. Browser mutations also require same origin
         # when Origin is present; SameSite=strict protects the session cookie.
         is_mcp = path == "/mcp" or path.startswith("/mcp/")
-        origin = request.headers.get("origin")
-        same_origin = not origin or origin == str(request.base_url).rstrip("/")
+        same_origin = _same_origin(request.headers.get("origin", ""), request)
         if not bearer and (is_mcp or not cookie or not same_origin):
             response = (
                 RedirectResponse("/login", status_code=303)

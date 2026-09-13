@@ -117,7 +117,17 @@ app.add_middleware(AuthMiddleware, token=AUTH_TOKEN)
 # Route the ASGI handler directly: no /mcp -> /mcp/ redirect or lost lifespan.
 from starlette.routing import Route  # noqa: E402
 
-handler = mcp_app.routes[0].app
+# Le SDK expose son StreamableHTTPASGIApp par une Route (et non un Mount) sur
+# `streamable_http_path`. On la sélectionne par son chemin et non par un index
+# nu : le SDK ajoute d'autres routes (métadonnées de ressource protégée) dès que
+# `settings.auth` est renseigné, et `routes[0]` casserait alors en silence.
+# `.app` est une INSTANCE de classe : Starlette la traite donc en app ASGI
+# toutes méthodes, et non en endpoint `request_response` limité à GET.
+handler = next(
+    route.app
+    for route in mcp_app.routes
+    if getattr(route, "path", None) == mcp.settings.streamable_http_path
+)
 app.router.routes.extend([Route("/mcp", handler), Route("/mcp/", handler)])
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -349,7 +359,12 @@ async def api_task_events(uid: str, request: Request):
             if snap:
                 yield f"data: {json.dumps({'type': 'snapshot', 'task': snap}, ensure_ascii=False)}\n\n"
             last_status = snap.get("status") if snap else None
-            cursor = max(0, int(request.headers.get("last-event-id", "0")))
+            try:
+                cursor = max(0, int(request.headers.get("last-event-id", "0")))
+            except ValueError:
+                # En-tête absurde (proxy, client exotique) : on repart du début
+                # plutôt que d'avorter le flux sur une ValueError.
+                cursor = 0
             while True:
                 if await request.is_disconnected():
                     break
@@ -405,9 +420,21 @@ def read_subtitles(uid: str, filename: str):
     snap = api_task_get(uid)
     if snap["status"] != "done":
         raise ValueError("La tâche n'est pas terminée")
-    if not any(item["name"] == filename for item in snap["outputs"]):
+    # `_collect_outputs` remonte les fichiers par rglob : un résultat peut vivre
+    # dans un sous-dossier de la tâche. On repart donc du chemin publié dans
+    # `outputs` (relatif à OUTPUT_DIR) au lieu d'exiger un fichier à plat, tout
+    # en confinant la lecture au répertoire de CETTE tâche.
+    matches = [item for item in snap["outputs"] if item["name"] == filename]
+    if not matches:
         raise ValueError("Résultat inconnu pour cette tâche")
-    path = input_path(OUTPUT_DIR / uid, filename)
+    if len(matches) > 1:
+        raise ValueError(
+            "Plusieurs résultats portent ce nom : les télécharger par leur URL"
+        )
+    task_dir = (OUTPUT_DIR / uid).resolve()
+    path = (OUTPUT_DIR / matches[0]["url"].removeprefix("/api/outputs/")).resolve()
+    if not path.is_relative_to(task_dir) or not path.is_file():
+        raise ValueError("Résultat introuvable pour cette tâche")
     if path.suffix.lower() not in (".srt", ".txt") or path.stat().st_size > 1024 * 1024:
         raise ValueError(
             "Télécharger ce résultat par HTTP (texte trop volumineux ou format binaire)"
@@ -519,7 +546,7 @@ def _run_task(uid: str, payload: Dict[str, Any]) -> None:
                     "tts_type": tts_idx,
                     "voice_role": payload.get("voice_role"),
                     "voice_rate": "+0%",
-                    "volume": str(payload.get("volume", "+0%")),
+                    "volume": "+0%",
                     "pitch": "+0Hz",
                     "is_cuda": False,
                     "voice_autorate": False,
@@ -642,8 +669,20 @@ def main():
 
     import uvicorn
 
+    # uvicorn n'honore X-Forwarded-Proto que si l'IP du proxy est dans
+    # `forwarded_allow_ips` (défaut : 127.0.0.1). Derrière Traefik le pair est
+    # l'IP du pod du proxy : sans ce réglage `request.url.scheme` resterait
+    # "http" et le cookie de session partirait sans l'attribut Secure en TLS.
+    # Le pod n'est joignable que par l'ingress, et l'auth ne repose pas sur
+    # l'IP cliente. Surchargeable par FORWARDED_ALLOW_IPS.
     uvicorn.run(
-        app, host=args.host, port=args.port, access_log=False, log_level="warning"
+        app,
+        host=args.host,
+        port=args.port,
+        access_log=False,
+        log_level="warning",
+        proxy_headers=True,
+        forwarded_allow_ips=os.getenv("FORWARDED_ALLOW_IPS", "*"),
     )
 
 
