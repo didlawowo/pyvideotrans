@@ -11,7 +11,7 @@ d'entrée par une fonction qui écrit dans le `TaskStore` mémoire.
 capter tous les messages de progression/téléchargement/d'erreur des tâches,
 sans toucher au code du cœur applicatif.
 """
-import json
+
 from typing import Any, Dict
 
 import videotrans.configure._helpers as _helpers
@@ -60,11 +60,13 @@ def install_bridge() -> None:
     # send_notification (notifications desktop) désactivé en mode web
     try:
         from videotrans.util import _ffmpeg_misc
+
         _ffmpeg_misc.send_notification = lambda title, message: None
     except Exception:
         pass
     try:
         from videotrans.util import tools
+
         tools.send_notification = lambda title, message: None
     except Exception:
         pass

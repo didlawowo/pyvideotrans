@@ -90,10 +90,10 @@
     <h2>Nouvelle tâche</h2>
 
     <div class="tabs" id="mode-tabs">
-      <div class="tab active" data-mode="vtv">🎬 Vidéo complète</div>
-      <div class="tab" data-mode="sts">📄 Sous-titres</div>
-      <div class="tab" data-mode="stt">🎙️ Transcription</div>
-      <div class="tab" data-mode="tts">🗣️ Doublage</div>
+      <button type="button" class="tab active" data-mode="vtv">🎬 Vidéo complète</button>
+      <button type="button" class="tab" data-mode="sts">📄 Sous-titres</button>
+      <button type="button" class="tab" data-mode="stt">🎙️ Transcription</button>
+      <button type="button" class="tab" data-mode="tts">🗣️ Doublage</button>
     </div>
 
     <form id="task-form" hx-encoding="multipart/form-data">
@@ -108,7 +108,7 @@
           <select name="source_language" id="source_language">
             <option value="auto">Auto-détection</option>
             {% for l in options.languages %}
-            <option value="{{ l }}">{{ l }}</option>
+            <option value="{{ l.code }}">{{ l.name }}</option>
             {% endfor %}
           </select>
         </div>
@@ -116,7 +116,7 @@
           <label for="target_language">Langue cible</label>
           <select name="target_language" id="target_language">
             {% for l in options.languages %}
-            <option value="{{ l }}" {% if l == 'français' %}selected{% endif %}>{{ l }}</option>
+            <option value="{{ l.code }}" {% if l.code == 'fr' %}selected{% endif %}>{{ l.name }}</option>
             {% endfor %}
           </select>
         </div>
@@ -125,7 +125,7 @@
       <div id="sts-fields"></div>
 
       <div id="vtv-fields">
-        <div class="grid2">
+        <div class="grid2" id="asr-fields">
           <div>
             <label for="recogn">Reconnaissance vocale (ASR)</label>
             <select name="recogn" id="recogn">
@@ -138,13 +138,13 @@
             <label for="model">Modèle ASR</label>
             <select name="model" id="model">
               {% for m in options.models %}
-              <option value="{{ m }}">{{ m }}</option>
+              <option value="{{ m }}" {% if m == 'large-v3-turbo' %}selected{% endif %}>{{ m }}</option>
               {% endfor %}
             </select>
           </div>
         </div>
 
-        <div>
+        <div id="translate-fields">
           <label for="translate">Canal de traduction</label>
           <select name="translate" id="translate">
             {% for t in options.translate %}
@@ -153,7 +153,7 @@
           </select>
         </div>
 
-        <div class="grid2">
+        <div class="grid2" id="voice-fields">
           <div>
             <label for="tts">Canal TTS</label>
             <select name="tts" id="tts">
@@ -164,13 +164,11 @@
           </div>
           <div>
             <label for="voice_role">Voix TTS</label>
-            <select name="voice_role" id="voice_role">
-              <option value="No">— Aucun doublage —</option>
-            </select>
+            <input type="text" name="voice_role" id="voice_role" value="No" placeholder="Identifiant de voix du fournisseur">
           </div>
         </div>
 
-        <div>
+        <div id="subtitle-fields">
           <label for="subtitle_type">Type de sous-titres</label>
           <select name="subtitle_type" id="subtitle_type">
             <option value="0">Aucun sous-titre</option>
@@ -182,16 +180,8 @@
         </div>
       </div>
 
-      <div id="tts-fields" style="display:none">
-        <div>
-          <label for="voice_role_tts">Voix (TTS)</label>
-          <select name="voice_role_tts" id="voice_role_tts">
-            {% for t in options.tts %}
-            <option value="{{ t }}">{{ t }}</option>
-            {% endfor %}
-          </select>
-        </div>
-      </div>
+      <p>Les endpoints Whisper et LLM locaux se configurent au lancement du service.
+        Pour le doublage, saisir l’identifiant de voix reconnu par le fournisseur ; « No » désactive le doublage vidéo.</p>
 
       <button type="submit" class="primary" id="start-btn">🚀 Lancer la traduction</button>
     </form>
@@ -203,13 +193,14 @@
     <span class="status" id="status-badge">—</span>
     <div id="logs" class=""><em>Aucune tâche lancée.</em></div>
     <ul class="files" id="output-files"></ul>
+    <h2>Tâches récentes (interface et Hermes)</h2>
+    <ul id="recent-tasks" class="files"></ul>
   </div>
 </div>
 
 <div id="toast"></div>
 
 <script>
-  const opts = {{ options | tojson }};
   let currentTask = null;
   let es = null;
 
@@ -219,18 +210,11 @@
     t.classList.add('active');
     const mode = t.dataset.mode;
     document.getElementById('mode').value = mode;
-    document.getElementById('vtv-fields').style.display = (mode === 'vtv') ? '' : 'none';
-    document.getElementById('tts-fields').style.display = (mode === 'tts') ? '' : 'none';
-    document.getElementById('sts-fields').innerHTML = '';
-    if (mode === 'sts') {
-      document.getElementById('sts-fields').innerHTML = `
-        <div>
-          <label for="translate">Canal de traduction</label>
-          <select name="translate" id="translate">
-            ${opts.translate.map(t => `<option value="${t}">${t}</option>`).join('')}
-          </select>
-        </div>`;
-    }
+    document.getElementById('asr-fields').style.display = ['vtv','stt'].includes(mode) ? '' : 'none';
+    document.getElementById('translate-fields').style.display = ['vtv','sts'].includes(mode) ? '' : 'none';
+    document.getElementById('voice-fields').style.display = ['vtv','tts'].includes(mode) ? '' : 'none';
+    document.getElementById('subtitle-fields').style.display = mode === 'vtv' ? '' : 'none';
+    document.getElementById('start-btn').textContent = '🚀 Lancer le traitement';
   }));
 
   // --- soumission : upload + création tâche -------------------------------
@@ -257,22 +241,20 @@
     // 2. créer la tâche
     const payload = {
       mode: form.get('mode'),
-      file_path: upload.path,
+      file_id: upload.file_id,
       source_language: form.get('source_language'),
       target_language: form.get('target_language'),
     };
     const mode = form.get('mode');
-    if (mode !== 'stt') payload.translate = form.get('translate');
-    if (mode === 'vtv') {
+    if (['vtv', 'sts'].includes(mode)) payload.translate = form.get('translate');
+    if (['vtv', 'stt'].includes(mode)) {
       payload.recogn = form.get('recogn');
       payload.model = form.get('model');
+    }
+    if (['vtv', 'tts'].includes(mode)) {
       payload.tts = form.get('tts');
       payload.voice_role = form.get('voice_role');
-      payload.subtitle_type = form.get('subtitle_type');
-    }
-    if (mode === 'tts') {
-      payload.voice_role = form.get('voice_role_tts');
-      payload.tts = form.get('voice_role_tts');
+      payload.subtitle_type = Number(form.get('subtitle_type'));
     }
 
     btn.textContent = '⏳ Démarrage…';
@@ -298,9 +280,16 @@
     logs.innerHTML = '';
     setStatus('running');
     es = new EventSource(`/api/tasks/${uuid}/events`);
+    let lastEvent = 0;
     es.onmessage = (ev) => {
       let d; try { d = JSON.parse(ev.data); } catch { return; }
-      if (d.type === 'log') appendLog(d.text, d.level || 'info');
+      if (d.id && d.id <= lastEvent) return;
+      if (d.id) lastEvent = d.id;
+      if (d.type === 'snapshot') {
+        setStatus(d.task.status);
+        renderFiles(d.task.outputs || []);
+      }
+      else if (d.type === 'log') appendLog(d.text, d.level || 'info');
       else if (d.type === 'status') setStatus(d.status);
       else if (d.type === 'error') { appendLog(d.text, 'error'); setStatus('error'); }
       else if (d.type === 'outputs') renderFiles(d.outputs || []);
@@ -308,6 +297,9 @@
         setStatus(d.task.status);
         renderFiles(d.task.outputs);
         es.close();
+        const btn = document.getElementById('start-btn');
+        btn.disabled = false;
+        btn.textContent = '🚀 Lancer le traitement';
       }
     };
     es.onerror = () => { /* EventSource retente auto : garde la connexion active */ };
@@ -344,6 +336,26 @@
     return n + ' o';
   }
   let toastTimer;
+  async function refreshTasks() {
+    try {
+      const response = await fetch('/api/tasks');
+      if (!response.ok) return;
+      const data = await response.json();
+      const list = document.getElementById('recent-tasks');
+      list.replaceChildren();
+      data.tasks.forEach(task => {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        const labels = {pending:'En attente', running:'En cours', done:'Terminée', error:'Erreur', stopped:'Arrêtée'};
+        button.textContent = `${task.name} — ${labels[task.status] || task.status}`;
+        button.addEventListener('click', () => connectTask(task.uuid));
+        item.appendChild(button); list.appendChild(item);
+      });
+    } catch { /* réessai lors de la prochaine actualisation */ }
+  }
+  refreshTasks();
+  setInterval(refreshTasks, 5000);
   function showToast(msg) {
     const t = document.getElementById('toast');
     t.textContent = msg; t.style.display = 'block';

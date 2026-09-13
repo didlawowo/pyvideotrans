@@ -1,0 +1,26 @@
+version: '3'
+includes:
+  base:
+    taskfile: ~/.config/Taskfile.base.yml
+    optional: true
+vars:
+  APP_NAME: pyvideotrans
+  IMAGE: pyvideotrans-web-mcp:1.1.0
+tasks:
+  web:smoke:
+    desc: Tester le MCP local ; AUDIO lance aussi une transcription réelle
+    cmds:
+      - '{{.PYTHON | default "python3"}} scripts/smoke_web_mcp.py'
+  web:build:
+    desc: Construire localement l’interface française et le MCP (CPU amd64)
+    cmds:
+      - docker build --platform linux/amd64 -f Dockerfile.web -t {{.IMAGE}} .
+  web:check:
+    cmds:
+      - ruff check server.py server_auth.py server_bridge.py server_mcp.py server_models.py server_state.py tests/test_server_state.py tests/test_server_web.py
+      - ruff format --check server.py server_auth.py server_bridge.py server_mcp.py server_models.py server_state.py tests/test_server_state.py tests/test_server_web.py
+      - '{{.PYTHON | default "python3"}} -m pytest -q tests/test_server_state.py tests/test_server_web.py'
+  web:run:
+    desc: Lancer localement (MCP_AUTH_TOKEN requis dans l’environnement)
+    cmds:
+      - '{{.PYTHON | default "python3"}} server.py --host 127.0.0.1 --port {{.PORT | default "9090"}}'

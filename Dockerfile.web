@@ -1,0 +1,25 @@
+# Overlay on the deployed CPU runtime; keep the base reproducible by digest.
+ARG BASE_IMAGE=oci-storage.dc-tech.work/pyvideotrans:v1.0.0@sha256:9c5cbd4f0854f71fd2ec5d72ecd5bde199a015d6f1977e0f403f51ba38440608
+FROM ${BASE_IMAGE} AS web-dependencies
+USER root
+COPY requirements-web.lock /tmp/requirements-web.lock
+RUN uv pip install --target /opt/web-deps --require-hashes -r /tmp/requirements-web.lock
+
+FROM ${BASE_IMAGE} AS web
+USER root
+COPY --from=web-dependencies /opt/web-deps /opt/web-deps
+WORKDIR /app
+COPY --chown=1000:1000 videotrans/ /app/videotrans/
+COPY --chown=1000:1000 server*.py /app/
+COPY --chown=1000:1000 templates/ /app/templates/
+COPY --chown=1000:1000 static/ /app/static/
+RUN mkdir -p /app/uploads /app/output && chown -R 1000:1000 /app/uploads /app/output
+ENV PYTHONPATH=/opt/web-deps:/app \
+    PYVIDEOTRANS_LANG=fr_FR \
+    PYVIDEOTRANS_HOST=0.0.0.0 \
+    PYVIDEOTRANS_PORT=9090 \
+    QT_QPA_PLATFORM=offscreen
+USER 1000:1000
+EXPOSE 9090
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9090/healthz')"
+CMD ["python", "server.py"]
