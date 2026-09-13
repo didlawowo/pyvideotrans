@@ -18,6 +18,11 @@ Il refuse de démarrer sans `MCP_AUTH_TOKEN`. Dans le navigateur, saisir ce jeto
 la page de connexion ; le cookie est HttpOnly, SameSite strict, avec une durée de huit heures.
 En HTTPS, le cookie porte aussi Secure. Hermes utilise toujours le Bearer.
 
+Le cookie n'est pas dérivé de `MCP_AUTH_TOKEN` : il est signé par un secret tiré au
+démarrage du processus. Un cookie volé ne révèle donc rien du Bearer, et **redémarrer
+le pod invalide toutes les sessions navigateur** — c'est la seule révocation
+disponible, cohérente avec l'état des tâches qui est lui aussi en mémoire.
+
 Après avoir défini `MCP_AUTH_TOKEN` dans son environnement, lancer :
 
 ```sh
@@ -49,6 +54,19 @@ upstream ; `no-key` est utilisé si aucune clé n'existe, pour les services loca
 Les paramètres de fournisseurs ne sont pas modifiables par un outil MCP.
 `PYVIDEOTRANS_INPUT_DIR`, `PYVIDEOTRANS_OUTPUT_DIR` et `PYVIDEOTRANS_MAX_UPLOAD_MB`
 permettent de changer les répertoires et la limite d'envoi (2048 Mio par défaut).
+
+## Derrière un reverse proxy
+
+Le serveur fait confiance aux en-têtes `X-Forwarded-*` de **toutes** les IP par défaut
+(`forwarded_allow_ips="*"`, surchargeable par `FORWARDED_ALLOW_IPS`). Sans cela, uvicorn
+ne les honore que depuis `127.0.0.1` : derrière Traefik le pair est l'IP du pod du proxy,
+`request.url.scheme` resterait `http` et le cookie de session partirait **sans l'attribut
+Secure** alors que la connexion est en TLS.
+
+Ce réglage est sûr ici : le pod n'est joignable que par l'ingress, et l'authentification
+ne repose pas sur l'IP cliente. Le contrôle d'origine des mutations navigateur compare
+par ailleurs l'**hôte** et non l'URL complète, donc il reste juste même si les en-têtes
+du proxy ne sont pas honorés. Une origine portant un autre hôte reste refusée.
 
 ## Connexion Hermes
 
