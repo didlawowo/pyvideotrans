@@ -19,3 +19,13 @@ runtime
 .ruff_cache
 .idea
 .DS_Store
+uploads/
+.env
+.env.*
+videotrans/cfg.json
+videotrans/params.json
+videotrans/ass.json
+videotrans/codec.json
+videotrans/languages.json
+videotrans/webui_state.json
+videotrans/glossary.txt

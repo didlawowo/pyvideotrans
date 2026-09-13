@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pyVideoTrans — Traduction vidéo</title>
+  <script src="/static/htmx.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --border: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #3b82f6;
+      --ok: #22c55e;
+      --err: #ef4444;
+      --warn: #f59e0b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.5;
+    }
+    header {
+      padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: .75rem;
+    }
+    header h1 { font-size: 1.1rem; margin: 0; font-weight: 600; }
+    .badge { font-size: .7rem; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: .15rem .6rem; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 1.5rem; display: grid; grid-template-columns: 5fr 4fr; gap: 1.5rem; }
+    @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: .75rem; padding: 1rem; }
+    .panel h2 { margin: 0 0 1rem; font-size: 1rem; }
+    label { display: block; font-size: .85rem; color: var(--muted); margin: .75rem 0 .25rem; }
+    select, input[type=text], input[type=file] {
+      width: 100%; background: var(--bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: .5rem; padding: .5rem .6rem; font-size: .9rem;
+    }
+    select:focus, input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+    button.primary {
+      width: 100%; margin-top: 1rem; padding: .7rem; font-size: 1rem; font-weight: 600;
+      background: var(--accent); color: white; border: 0; border-radius: .5rem; cursor: pointer;
+    }
+    button.primary:disabled { opacity: .5; cursor: not-allowed; }
+    button:not(.primary) {
+      background: transparent; color: var(--text); border: 1px solid var(--border);
+      border-radius: .5rem; padding: .4rem .8rem; cursor: pointer; font-size: .85rem;
+    }
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .tab {
+      padding: .45rem .9rem; border: 1px solid var(--border); border-radius: .6rem;
+      cursor: pointer; font-size: .85rem; color: var(--muted); background: transparent;
+    }
+    .tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+    .tab-screen { display: none; }
+    .tab-screen.active { display: block; }
+    #logs {
+      background: #0b1120; border: 1px solid var(--border); border-radius: .5rem;
+      min-height: 320px; max-height: 480px; overflow-y: auto;
+      font: .8rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; padding: .6rem; white-space: pre-wrap;
+    }
+    .log-line { color: var(--text); }
+    .log-warn { color: var(--warn); }
+    .log-error { color: var(--err); }
+    .status { font-size: .85rem; padding: .2rem .5rem; border-radius: .4rem; display: inline-block; margin-bottom: .5rem; }
+    .status-running { background: rgba(59,130,246,.15); color: #93c5fd; }
+    .status-done { background: rgba(34,197,94,.15); color: #86efac; }
+    .status-error { background: rgba(239,68,68,.15); color: #fca5a5; }
+    .status-pending { background: rgba(148,163,184,.15); color: #cbd5e1; }
+    .files { list-style: none; padding: 0; margin: .75rem 0 0; }
+    .files li { padding: .4rem 0; border-bottom: 1px dashed var(--border); font-size: .85rem; }
+    .files a { color: #93c5fd; text-decoration: none; }
+    .files a:hover { text-decoration: underline; }
+    .hint { font-size: .75rem; color: var(--muted); margin-top: 1rem; }
+    #toast { display: none; position: fixed; bottom: 1rem; right: 1rem; background: #111827; border: 1px solid var(--border); border-radius: .5rem; padding: .8rem 1rem; max-width: 320px; font-size: .85rem; z-index: 10; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>pyVideoTrans</h1>
+  <span class="badge">traduction vidéo et sous-titres</span>
+</header>
+
+<div class="wrap">
+  <!-- Colonne gauche : formulaire -->
+  <div class="panel">
+    <h2>Nouvelle tâche</h2>
+
+    <div class="tabs" id="mode-tabs">
+      <button type="button" class="tab active" data-mode="vtv">🎬 Vidéo complète</button>
+      <button type="button" class="tab" data-mode="sts">📄 Sous-titres</button>
+      <button type="button" class="tab" data-mode="stt">🎙️ Transcription</button>
+      <button type="button" class="tab" data-mode="tts">🗣️ Doublage</button>
+    </div>
+
+    <form id="task-form" hx-encoding="multipart/form-data">
+      <input type="hidden" name="mode" id="mode" value="vtv">
+
+      <label for="file">Fichier (vidéo, audio ou .srt)</label>
+      <input type="file" name="file" id="file" required>
+
+      <div class="grid2">
+        <div>
+          <label for="source_language">Langue source</label>
+          <select name="source_language" id="source_language">
+            <option value="auto">Auto-détection</option>
+            {% for l in options.languages %}
+            <option value="{{ l.code }}">{{ l.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="target_language">Langue cible</label>
+          <select name="target_language" id="target_language">
+            {% for l in options.languages %}
+            <option value="{{ l.code }}" {% if l.code == 'fr' %}selected{% endif %}>{{ l.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div id="sts-fields"></div>
+
+      <div id="vtv-fields">
+        <div class="grid2" id="asr-fields">
+          <div>
+            <label for="recogn">Reconnaissance vocale (ASR)</label>
+            <select name="recogn" id="recogn">
+              {% for r in options.recogn %}
+              <option value="{{ r }}">{{ r }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label for="model">Modèle ASR</label>
+            <select name="model" id="model">
+              {% for m in options.models %}
+              <option value="{{ m }}" {% if m == 'large-v3-turbo' %}selected{% endif %}>{{ m }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div id="translate-fields">
+          <label for="translate">Canal de traduction</label>
+          <select name="translate" id="translate">
+            {% for t in options.translate %}
+            <option value="{{ t }}">{{ t }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="grid2" id="voice-fields">
+          <div>
+            <label for="tts">Canal TTS</label>
+            <select name="tts" id="tts">
+              {% for t in options.tts %}
+              <option value="{{ t }}">{{ t }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label for="voice_role">Voix TTS</label>
+            <input type="text" name="voice_role" id="voice_role" value="No" placeholder="Identifiant de voix du fournisseur">
+          </div>
+        </div>
+
+        <div id="subtitle-fields">
+          <label for="subtitle_type">Type de sous-titres</label>
+          <select name="subtitle_type" id="subtitle_type">
+            <option value="0">Aucun sous-titre</option>
+            <option value="1">Incrustés (hardburn)</option>
+            <option value="2" selected>Souples (soft)</option>
+            <option value="3">Horodés + traduits (double)</option>
+            <option value="4">Souples + traduits (double)</option>
+          </select>
+        </div>
+      </div>
+
+      <p>Les endpoints Whisper et LLM locaux se configurent au lancement du service.
+        Pour le doublage, saisir l’identifiant de voix reconnu par le fournisseur ; « No » désactive le doublage vidéo.</p>
+
+      <button type="submit" class="primary" id="start-btn">🚀 Lancer la traduction</button>
+    </form>
+  </div>
+
+  <!-- Colonne droite : progression -->
+  <div class="panel">
+    <h2>Progression</h2>
+    <span class="status" id="status-badge">—</span>
+    <div id="logs" class=""><em>Aucune tâche lancée.</em></div>
+    <ul class="files" id="output-files"></ul>
+    <h2>Tâches récentes (interface et Hermes)</h2>
+    <ul id="recent-tasks" class="files"></ul>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  let currentTask = null;
+  let es = null;
+
+  // --- onglets de mode ---------------------------------------------------
+  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    const mode = t.dataset.mode;
+    document.getElementById('mode').value = mode;
+    document.getElementById('asr-fields').style.display = ['vtv','stt'].includes(mode) ? '' : 'none';
+    document.getElementById('translate-fields').style.display = ['vtv','sts'].includes(mode) ? '' : 'none';
+    document.getElementById('voice-fields').style.display = ['vtv','tts'].includes(mode) ? '' : 'none';
+    document.getElementById('subtitle-fields').style.display = mode === 'vtv' ? '' : 'none';
+    document.getElementById('start-btn').textContent = '🚀 Lancer le traitement';
+  }));
+
+  // --- soumission : upload + création tâche -------------------------------
+  document.getElementById('task-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('start-btn');
+    btn.disabled = true; btn.textContent = '⏳ Téléversement…';
+
+    const form = new FormData(e.target);
+    const file = document.getElementById('file').files[0];
+    if (!file) { showToast('Choisissez un fichier.'); btn.disabled = false; return; }
+
+    // 1. upload
+    let upload;
+    try {
+      const up = new FormData(); up.append('file', file);
+      const r = await fetch('/api/upload', { method: 'POST', body: up });
+      upload = await r.json();
+      if (!r.ok) throw new Error(upload.detail || 'Erreur upload');
+    } catch (err) {
+      showToast('Échec du téléversement: ' + err.message); btn.disabled = false; btn.textContent = '🚀 Lancer la traduction'; return;
+    }
+
+    // 2. créer la tâche
+    const payload = {
+      mode: form.get('mode'),
+      file_id: upload.file_id,
+      source_language: form.get('source_language'),
+      target_language: form.get('target_language'),
+    };
+    const mode = form.get('mode');
+    if (['vtv', 'sts'].includes(mode)) payload.translate = form.get('translate');
+    if (['vtv', 'stt'].includes(mode)) {
+      payload.recogn = form.get('recogn');
+      payload.model = form.get('model');
+    }
+    if (['vtv', 'tts'].includes(mode)) {
+      payload.tts = form.get('tts');
+      payload.voice_role = form.get('voice_role');
+      payload.subtitle_type = Number(form.get('subtitle_type'));
+    }
+
+    btn.textContent = '⏳ Démarrage…';
+    try {
+      const r = await fetch('/api/tasks', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || 'Erreur création');
+      connectTask(data.uuid);
+      btn.textContent = '✅ Lancée — voir progression';
+      btn.disabled = true;
+    } catch (err) {
+      showToast('Échec du démarrage: ' + err.message); btn.disabled = false; btn.textContent = '🚀 Lancer la traduction';
+    }
+  });
+
+  // --- connexion SSE ------------------------------------------------------
+  function connectTask(uuid) {
+    if (es) es.close();
+    currentTask = uuid;
+    const logs = document.getElementById('logs');
+    logs.innerHTML = '';
+    setStatus('running');
+    es = new EventSource(`/api/tasks/${uuid}/events`);
+    let lastEvent = 0;
+    es.onmessage = (ev) => {
+      let d; try { d = JSON.parse(ev.data); } catch { return; }
+      if (d.id && d.id <= lastEvent) return;
+      if (d.id) lastEvent = d.id;
+      if (d.type === 'snapshot') {
+        setStatus(d.task.status);
+        renderFiles(d.task.outputs || []);
+      }
+      else if (d.type === 'log') appendLog(d.text, d.level || 'info');
+      else if (d.type === 'status') setStatus(d.status);
+      else if (d.type === 'error') { appendLog(d.text, 'error'); setStatus('error'); }
+      else if (d.type === 'outputs') renderFiles(d.outputs || []);
+      else if (d.type === 'end') {
+        setStatus(d.task.status);
+        renderFiles(d.task.outputs);
+        es.close();
+        const btn = document.getElementById('start-btn');
+        btn.disabled = false;
+        btn.textContent = '🚀 Lancer le traitement';
+      }
+    };
+    es.onerror = () => { /* EventSource retente auto : garde la connexion active */ };
+  }
+
+  function appendLog(text, level) {
+    const logs = document.getElementById('logs');
+    const line = document.createElement('div');
+    line.className = 'log-line log-' + (level === 'error' ? 'error' : level === 'warning' ? 'warn' : '');
+    line.textContent = text;
+    logs.appendChild(line);
+    logs.scrollTop = logs.scrollHeight;
+  }
+  function setStatus(s) {
+    const el = document.getElementById('status-badge');
+    el.className = 'status status-' + s;
+    el.textContent = s === 'running' ? '⏳ En cours…' : s === 'done' ? '✅ Terminée' : s === 'error' ? '❌ Erreur' : s;
+  }
+  function renderFiles(files) {
+    const ul = document.getElementById('output-files');
+    ul.innerHTML = '';
+    (files || []).forEach(f => {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.href = f.url; a.textContent = f.name + ' (' + fmtSize(f.size) + ')';
+      li.appendChild(a); ul.appendChild(li);
+    });
+  }
+  function fmtSize(n) {
+    if (!n) return '?';
+    if (n > 1e9) return (n / 1e9).toFixed(1) + ' Go';
+    if (n > 1e6) return (n / 1e6).toFixed(1) + ' Mo';
+    if (n > 1e3) return (n / 1e3).toFixed(0) + ' kO';
+    return n + ' o';
+  }
+  let toastTimer;
+  async function refreshTasks() {
+    try {
+      const response = await fetch('/api/tasks');
+      if (!response.ok) return;
+      const data = await response.json();
+      const list = document.getElementById('recent-tasks');
+      list.replaceChildren();
+      data.tasks.forEach(task => {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        const labels = {pending:'En attente', running:'En cours', done:'Terminée', error:'Erreur', stopped:'Arrêtée'};
+        button.textContent = `${task.name} — ${labels[task.status] || task.status}`;
+        button.addEventListener('click', () => connectTask(task.uuid));
+        item.appendChild(button); list.appendChild(item);
+      });
+    } catch { /* réessai lors de la prochaine actualisation */ }
+  }
+  refreshTasks();
+  setInterval(refreshTasks, 5000);
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.style.display = 'block';
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.style.display = 'none', 4000);
+  }
+</script>
+</body>
+</html>
